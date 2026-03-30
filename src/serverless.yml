@@ -1,0 +1,14 @@
+service: aws-serverless-backend
+
+provider:
+  name: aws
+  runtime: python3.11
+  region: us-east-1
+
+functions:
+  api:
+    handler: src.app.lambda_handler
+    events:
+      - http:
+          path: health
+          method: get
