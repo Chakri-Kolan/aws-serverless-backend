@@ -1,0 +1,93 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Serverless task API using API Gateway, Lambda, and DynamoDB
+
+Parameters:
+  StageName:
+    Type: String
+    Default: dev
+    AllowedPattern: "^[a-z0-9-]+$"
+  AllowedOrigin:
+    Type: String
+    Default: "*"
+
+Globals:
+  Function:
+    Runtime: python3.11
+    Architectures: [arm64]
+    MemorySize: 256
+    Timeout: 10
+    Tracing: Active
+    Environment:
+      Variables:
+        TASKS_TABLE: !Ref TasksTable
+        LOG_LEVEL: INFO
+
+Resources:
+  TaskApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref StageName
+      CorsConfiguration:
+        AllowOrigins: [!Ref AllowedOrigin]
+        AllowHeaders: [Content-Type]
+        AllowMethods: [GET, POST, PATCH, DELETE]
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: src.app.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TasksTable
+      Events:
+        Health:
+          Type: HttpApi
+          Properties: {ApiId: !Ref TaskApi, Path: /health, Method: GET}
+        ListTasks:
+          Type: HttpApi
+          Properties: {ApiId: !Ref TaskApi, Path: /tasks, Method: GET}
+        CreateTask:
+          Type: HttpApi
+          Properties: {ApiId: !Ref TaskApi, Path: /tasks, Method: POST}
+        GetTask:
+          Type: HttpApi
+          Properties: {ApiId: !Ref TaskApi, Path: "/tasks/{id}", Method: GET}
+        UpdateTask:
+          Type: HttpApi
+          Properties: {ApiId: !Ref TaskApi, Path: "/tasks/{id}", Method: PATCH}
+        DeleteTask:
+          Type: HttpApi
+          Properties: {ApiId: !Ref TaskApi, Path: "/tasks/{id}", Method: DELETE}
+
+  ApiFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ApiFunction}
+      RetentionInDays: 14
+
+  TasksTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub ${AWS::StackName}-tasks
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+
+Outputs:
+  ApiUrl:
+    Description: Base URL for the task API
+    Value: !Sub https://${TaskApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${StageName}
+  TasksTableName:
+    Value: !Ref TasksTable

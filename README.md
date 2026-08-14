@@ -1,36 +1,80 @@
-# AWS Serverless Backend Platform
+# AWS Serverless Task API
 
-Production-grade backend service built using AWS Lambda, API Gateway, and DynamoDB.
+[![CI](https://github.com/Chakri-Kolan/aws-serverless-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/Chakri-Kolan/aws-serverless-backend/actions/workflows/ci.yml)
 
-## Overview
-This project demonstrates a scalable serverless backend architecture for enterprise applications, including API routing, request validation, pagination, structured logging, and DynamoDB data access patterns.
-
-## Tech Stack
-- Python
-- AWS Lambda
-- API Gateway
-- DynamoDB
-- CloudWatch
-- IAM
-- Serverless Framework
-
-## Key Features
-- REST API endpoints
-- cursor-based pagination
-- structured error handling
-- CloudWatch logging
-- retry and timeout controls
-- DynamoDB query optimization
-- scalable event-driven architecture
+A production-style REST API built with Python, AWS Lambda, API Gateway HTTP API, and DynamoDB. The project demonstrates request validation, conditional writes, cursor pagination, least-privilege IAM, infrastructure as code, and credential-free unit testing.
 
 ## Architecture
-Client → API Gateway → Lambda → DynamoDB
 
-## Sample Use Cases
-- user management APIs
-- analytics aggregation endpoints
-- paginated reporting services
-- event processing workflows
+```text
+Client -> API Gateway -> Lambda -> DynamoDB
+                           |
+                           +----> CloudWatch Logs
+```
 
-## Why This Project
-Built to reflect real-world cloud backend engineering patterns used in production environments.
+See [docs/architecture.md](docs/architecture.md) for design decisions and production extensions.
+
+## API
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health` | Service health |
+| `POST` | `/tasks` | Create a task |
+| `GET` | `/tasks?limit=20&cursor=...` | Paginated task list |
+| `GET` | `/tasks/{id}` | Retrieve a task |
+| `PATCH` | `/tasks/{id}` | Update title, description, or status |
+| `DELETE` | `/tasks/{id}` | Delete a task |
+
+Valid task statuses are `todo`, `in_progress`, and `done`.
+
+```bash
+curl -X POST "$API_URL/tasks" \
+  -H 'content-type: application/json' \
+  -d '{"title":"Ship portfolio API","description":"Deploy and verify"}'
+```
+
+## Local validation
+
+Requirements: Python 3.11+ and the AWS SAM CLI.
+
+```bash
+python -m unittest discover -v
+sam validate --lint
+sam build
+```
+
+Unit tests use an in-memory DynamoDB test double, so they need no AWS account or credentials.
+
+## Deploy
+
+Authenticate the AWS CLI, then run:
+
+```bash
+sam build
+sam deploy --guided --stack-name aws-serverless-backend-dev
+```
+
+SAM prints the deployed API URL. To avoid charges after evaluation:
+
+```bash
+aws cloudformation delete-stack --stack-name aws-serverless-backend-dev
+```
+
+The DynamoDB table has a retention policy to protect data, so remove it explicitly only when data deletion is intended.
+
+## Engineering highlights
+
+- AWS resources defined in one repeatable AWS SAM/CloudFormation stack
+- DynamoDB encryption, point-in-time recovery, and pay-per-request capacity
+- Least-privilege function role scoped to the generated table
+- Structured API errors and request correlation IDs
+- Base64 URL-safe continuation cursors
+- CI linting, unit tests, and deploy-package validation
+
+## Cost
+
+The architecture is scale-to-zero and typically remains within AWS free-tier allowances for portfolio traffic. Actual charges depend on usage and account eligibility.
+
+## License
+
+MIT
