@@ -1,0 +1,257 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Authenticated CRUD API using API Gateway, Lambda, Cognito, and DynamoDB.
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedPattern: "^[a-z][a-z0-9-]{0,15}$"
+    Description: Short environment name used in resource names and the API stage.
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures:
+      - arm64
+    MemorySize: 256
+    Timeout: 10
+    Tracing: Active
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref ItemsTable
+        LOG_LEVEL: INFO
+        CORS_ALLOW_ORIGIN: "*"
+    Tags:
+      Project: aws-serverless-backend
+      ManagedBy: aws-sam
+      Environment: !Ref Stage
+
+Resources:
+  Api:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub aws-serverless-backend-${Stage}
+      StageName: !Ref Stage
+      EndpointConfiguration: REGIONAL
+      TracingEnabled: true
+      Cors:
+        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization'"
+        AllowOrigin: "'*'"
+      Auth:
+        DefaultAuthorizer: CognitoAuthorizer
+        AddDefaultAuthorizerToCorsPreflight: false
+        Authorizers:
+          CognitoAuthorizer:
+            UserPoolArn: !GetAtt ApiUserPool.Arn
+      Models:
+        CreateItemRequest:
+          type: object
+          additionalProperties: false
+          required:
+            - name
+          properties:
+            name:
+              type: string
+              minLength: 1
+              maxLength: 200
+            description:
+              type: string
+              maxLength: 2000
+            metadata:
+              type: object
+        UpdateItemRequest:
+          type: object
+          additionalProperties: false
+          minProperties: 1
+          properties:
+            name:
+              type: string
+              minLength: 1
+              maxLength: 200
+            description:
+              type: string
+              maxLength: 2000
+            metadata:
+              type: object
+      GatewayResponses:
+        DEFAULT_4XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+              Cache-Control: "'no-store'"
+          ResponseTemplates:
+            application/json: '{"error":{"code":"REQUEST_REJECTED","message":$context.error.messageString,"request_id":"$context.requestId"}}'
+        DEFAULT_5XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+              Cache-Control: "'no-store'"
+          ResponseTemplates:
+            application/json: '{"error":{"code":"GATEWAY_ERROR","message":"Request failed at the API gateway","request_id":"$context.requestId"}}'
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub aws-serverless-backend-${Stage}-api
+      Description: Authenticated per-user item CRUD API
+      CodeUri: src/
+      Handler: app.lambda_handler
+      Policies:
+        - Statement:
+            - Sid: ItemTableCrud
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:DeleteItem
+                - dynamodb:Query
+              Resource: !GetAtt ItemsTable.Arn
+      Events:
+        Health:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /health
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        CreateItem:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /items
+            Method: POST
+            RequestModel:
+              Model: CreateItemRequest
+              Required: true
+              ValidateBody: true
+        ListItems:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /items
+            Method: GET
+        GetItem:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /items/{itemId}
+            Method: GET
+        UpdateItem:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /items/{itemId}
+            Method: PUT
+            RequestModel:
+              Model: UpdateItemRequest
+              Required: true
+              ValidateBody: true
+        DeleteItem:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /items/{itemId}
+            Method: DELETE
+
+  ApiFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ApiFunction}
+      RetentionInDays: 14
+
+  ItemsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub aws-serverless-backend-${Stage}-items
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: owner_id
+          AttributeType: S
+        - AttributeName: item_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: owner_id
+          KeyType: HASH
+        - AttributeName: item_id
+          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Project
+          Value: aws-serverless-backend
+        - Key: ManagedBy
+          Value: aws-sam
+        - Key: Environment
+          Value: !Ref Stage
+
+  ApiUserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: !Sub aws-serverless-backend-${Stage}-users
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          RequireUppercase: true
+          TemporaryPasswordValidityDays: 7
+      MfaConfiguration: OPTIONAL
+      EnabledMfas:
+        - SOFTWARE_TOKEN_MFA
+      UserPoolTags:
+        Project: aws-serverless-backend
+        ManagedBy: aws-sam
+        Environment: !Ref Stage
+
+  ApiUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub aws-serverless-backend-${Stage}-client
+      UserPoolId: !Ref ApiUserPool
+      GenerateSecret: false
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint
+    Value: !Sub https://${Api}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${Stage}
+  UserPoolId:
+    Description: Cognito user pool ID
+    Value: !Ref ApiUserPool
+  UserPoolClientId:
+    Description: Cognito public app client ID
+    Value: !Ref ApiUserPoolClient
+  ItemsTableName:
+    Description: DynamoDB table name
+    Value: !Ref ItemsTable
