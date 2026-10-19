@@ -1,0 +1,13 @@
+.coverage
+.env
+.pytest_cache/
+.ruff_cache/
+.sam-venv/
+.aws-sam/
+.serverless-ci/
+.serverless/
+__pycache__/
+*.py[cod]
+node_modules/
+venv/
+.venv/

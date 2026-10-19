@@ -1,0 +1,5 @@
+-r src/requirements.txt
+moto[dynamodb]==5.1.13
+pytest==8.4.2
+pytest-cov==7.0.0
+ruff==0.13.2
